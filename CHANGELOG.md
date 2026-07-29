@@ -4,19 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## [0.6.4] - 2026-05-28
+## v0.6.5 (2026-07-30)
+
+### New features
+
+* Implement `admission::FairShare` to provide a work-conserving admission policy for workloads partitioned by key.
+
+## v0.6.4 (2026-05-28)
 
 ### New features
 
 * Implement `shutdown::ShutdownWatch` to wait for the shutdown signal without blocking `ShutdownSend::await_shutdown`.
 
-## [0.6.3] - 2026-01-21
+## v0.6.3 (2026-01-21)
 
 ### Improvements
 
 * `OnceMap` no longer requires `K: Clone` everywhere.
 
-## [0.6.2] - 2026-01-21
+## v0.6.2 (2026-01-21)
 
 ### New features
 
@@ -27,13 +33,13 @@ All notable changes to this project will be documented in this file.
 
 * `singleflight::Group::forget` now accepts any `&Q` where `Q: ?Sized + Hash + Eq` and `K: Borrow<Q>` aligning with standard HashMap's interface.
 
-## [0.6.1] - 2026-01-11
+## v0.6.1 (2026-01-11)
 
 ### New features
 
 * Implement `singleflight` pattern for deduplicating concurrent requests.
 
-## [0.6.0] - 2026-01-04
+## v0.6.0 (2026-01-04)
 
 ### Breaking changes
 
