@@ -674,6 +674,7 @@ pub struct MappedMutexGuard<'a, T: ?Sized> {
     d: NonNull<T>,
     /// Reference to the original mutex's semaphore, used for releasing the lock
     s: &'a internal::Semaphore,
+    // Mutable access requires invariance over T.
     variance: PhantomData<&'a mut T>,
 }
 
@@ -899,7 +900,8 @@ pub struct OwnedMappedMutexGuard<T: ?Sized, U: ?Sized> {
     // This NonNull pointer precisely points to the subfield U, telling us which
     // memory location we can operate on, with compile-time guarantee of non-null
     d: NonNull<U>,
-    variance: PhantomData<U>,
+    // Mutable access requires invariance over U.
+    variance: PhantomData<*mut U>,
 }
 
 // SAFETY: OwnedMappedMutexGuard can be safely sent between threads when T: Send and U: Send.
