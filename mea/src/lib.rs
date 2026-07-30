@@ -21,8 +21,6 @@
 //!
 //! # Features
 //!
-//! * [`admission::FairShare`]: A work-conserving admission policy that fairly shares bounded
-//!   concurrency across keys
 //! * [`Barrier`]: A synchronization point where multiple tasks can wait until all participants
 //!   arrive
 //! * [`Condvar`]: A condition variable that allows tasks to wait for a notification
@@ -34,9 +32,9 @@
 //! * [`OnceMap`]: A hash map that runs computation only once for each key and stores the result.
 //! * [`RwLock`]: A reader-writer lock that allows multiple readers or a single writer at a time
 //! * [`Semaphore`]: A synchronization primitive that controls access to a shared resource
-//! * [`ShutdownSend`], [`ShutdownRecv`] & [`ShutdownWatch`]: A composite synchronization primitive
-//!   for managing shutdown signals
 //! * [`WaitGroup`]: A synchronization primitive that allows waiting for multiple tasks to complete
+//! * [`admission::FairShare`]: A work-conserving admission policy that fairly shares bounded
+//!   concurrency across keys
 //! * [`atomicbox`]: A safe, owning version of `AtomicPtr` for heap-allocated data.
 //! * [`broadcast`]: A multi-producer, multi-consumer broadcast channel.
 //! * [`mpsc::bounded`]: A multi-producer, single-consumer bounded queue for sending values between
@@ -44,6 +42,7 @@
 //! * [`mpsc::unbounded`]: A multi-producer, single-consumer unbounded queue for sending values
 //!   between asynchronous tasks.
 //! * [`oneshot::channel`]: A one-shot channel for sending a single value between tasks.
+//! * [`shutdown`]: A composite synchronization primitive for managing shutdown signals.
 //! * [`singleflight::Group`]: A duplicate function call suppression mechanism.
 //!
 //! # Runtime Agnostic
@@ -67,9 +66,6 @@
 //! [`OnceMap`]: once::OnceMap
 //! [`RwLock`]: rwlock::RwLock
 //! [`Semaphore`]: semaphore::Semaphore
-//! [`ShutdownSend`]: shutdown::ShutdownSend
-//! [`ShutdownRecv`]: shutdown::ShutdownRecv
-//! [`ShutdownWatch`]: shutdown::ShutdownWatch
 //! [`WaitGroup`]: waitgroup::WaitGroup
 
 mod internal;
