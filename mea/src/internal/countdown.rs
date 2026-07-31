@@ -56,8 +56,14 @@ impl CountdownState {
 
     /// Drain and wake up all waiters.
     pub(crate) fn wake_all(&self) {
-        let mut waiters = self.waiters.lock();
-        waiters.wake_all();
+        let wakers = {
+            let mut waiters = self.waiters.lock();
+            waiters.take_wakers()
+        };
+
+        for waker in wakers {
+            waker.wake();
+        }
     }
 
     /// Registers a waker to be woken up when the countdown reaches zero.
