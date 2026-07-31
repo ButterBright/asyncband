@@ -39,15 +39,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - name: Install toolchain
+      - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt,clippy
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: typos-cli,taplo-cli,hawkeye
-      - run: cargo x lint
+          tool: typos-cli,taplo-cli,hawkeye,cargo-semver-checks
+      - run: cargo +nightly x lint
 
   test:
     name: Run tests
