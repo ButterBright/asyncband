@@ -38,18 +38,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt,clippy
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: typos-cli,taplo-cli,hawkeye,cargo-semver-checks
-      - run: cargo +nightly x lint
+          tool: typos-cli,taplo-cli,hawkeye
+      - run: cargo x lint
 
   test:
     name: Run tests
@@ -61,11 +59,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Delete rust-toolchain.toml
         run: rm rust-toolchain.toml
-      - name: Install toolchain
+      - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust-version }}

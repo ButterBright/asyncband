@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use std::process::Command as StdCommand;
+use std::time::Duration;
 
 use clap::Parser;
 use clap::Subcommand;
+use semver::Version;
+use serde::Deserialize;
 
 #[derive(Parser)]
 struct Command {
@@ -28,6 +31,7 @@ impl Command {
         match self.sub {
             SubCommand::Build(cmd) => cmd.run(),
             SubCommand::Lint(cmd) => cmd.run(),
+            SubCommand::Semver(cmd) => cmd.run(),
             SubCommand::Test(cmd) => cmd.run(),
         }
     }
@@ -37,8 +41,10 @@ impl Command {
 enum SubCommand {
     #[clap(about = "Compile workspace packages.")]
     Build(CommandBuild),
-    #[clap(about = "Run code quality and API compatibility checks.")]
+    #[clap(about = "Run workspace quality checks.")]
     Lint(CommandLint),
+    #[clap(about = "Verify API compatibility for a planned release.")]
+    Semver(CommandSemver),
     #[clap(about = "Run unit tests.")]
     Test(CommandTest),
 }
@@ -68,6 +74,29 @@ impl CommandTest {
 }
 
 #[derive(Parser)]
+struct CommandSemver {
+    #[arg(long, value_name = "VERSION", help = "Version that will be released.")]
+    release_version: Version,
+}
+
+impl CommandSemver {
+    fn run(self) {
+        let Some(baseline_version) = find_latest_release() else {
+            println!("mea has not been published; skipping semver checks for the first release.");
+            return;
+        };
+
+        let release_type = classify_release_type(&baseline_version, &self.release_version);
+        println!(
+            "Checking release {} against mea@{baseline_version} as a {} release.",
+            self.release_version,
+            release_type.as_str()
+        );
+        run_command(make_semver_check_cmd(&baseline_version, release_type));
+    }
+}
+
+#[derive(Parser)]
 #[clap(name = "lint")]
 struct CommandLint {
     #[arg(long, help = "Automatically apply lint suggestions.")]
@@ -82,7 +111,23 @@ impl CommandLint {
         run_command(make_typos_cmd());
         run_command(make_hawkeye_cmd(self.fix));
         run_command(make_doc_cmd());
-        run_command(make_semver_check_cmd());
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SemverReleaseType {
+    Major,
+    Minor,
+    Patch,
+}
+
+impl SemverReleaseType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Major => "major",
+            Self::Minor => "minor",
+            Self::Patch => "patch",
+        }
     }
 }
 
@@ -111,6 +156,70 @@ fn run_command(mut cmd: StdCommand) {
     println!("{cmd:?}");
     let status = cmd.status().expect("failed to execute process");
     assert!(status.success(), "command failed: {status}");
+}
+
+fn find_latest_release() -> Option<Version> {
+    let agent = ureq::Agent::from(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .build(),
+    );
+
+    let mut response = match agent.get("https://crates.io/api/v1/crates/mea").call() {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(404)) => return None,
+        Err(err) => panic!("failed to query crates.io for mea: {err}"),
+    };
+
+    #[derive(Deserialize)]
+    struct CratesIoResponse {
+        #[serde(rename = "crate")]
+        crate_data: CratesIoCrate,
+    }
+
+    #[derive(Deserialize)]
+    struct CratesIoCrate {
+        max_version: String,
+        max_stable_version: Option<String>,
+    }
+
+    let response: CratesIoResponse = response
+        .body_mut()
+        .read_json()
+        .expect("failed to decode crates.io response for mea");
+    let version = response
+        .crate_data
+        .max_stable_version
+        .unwrap_or(response.crate_data.max_version);
+    Some(
+        Version::parse(&version)
+            .unwrap_or_else(|err| panic!("crates.io returned invalid version {version:?}: {err}")),
+    )
+}
+
+fn classify_release_type(baseline: &Version, release: &Version) -> SemverReleaseType {
+    assert!(
+        baseline.cmp_precedence(release).is_lt(),
+        "release version {release} must be greater than baseline {baseline}"
+    );
+
+    if baseline.major != release.major {
+        SemverReleaseType::Major
+    } else if baseline.minor != release.minor {
+        if release.major == 0 {
+            SemverReleaseType::Major
+        } else {
+            SemverReleaseType::Minor
+        }
+    } else if baseline.patch != release.patch {
+        match (release.major, release.minor) {
+            (0, 0) => SemverReleaseType::Major,
+            (0, _) => SemverReleaseType::Minor,
+            _ => SemverReleaseType::Patch,
+        }
+    } else {
+        SemverReleaseType::Major
+    }
 }
 
 fn make_build_cmd(locked: bool) -> StdCommand {
@@ -182,7 +291,10 @@ fn make_doc_cmd() -> StdCommand {
     cmd
 }
 
-fn make_semver_check_cmd() -> StdCommand {
+fn make_semver_check_cmd(
+    baseline_version: &Version,
+    release_type: SemverReleaseType,
+) -> StdCommand {
     ensure_installed("cargo-semver-checks", "cargo-semver-checks");
     let mut cmd = find_command("cargo");
     cmd.args([
@@ -192,7 +304,10 @@ fn make_semver_check_cmd() -> StdCommand {
         "--package",
         "mea",
         "--all-features",
-    ]);
+        "--baseline-version",
+    ])
+    .arg(baseline_version.to_string())
+    .args(["--release-type", release_type.as_str()]);
     cmd
 }
 
@@ -226,4 +341,31 @@ fn make_taplo_cmd(fix: bool) -> StdCommand {
 fn main() {
     let cmd = Command::parse();
     cmd.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_release_types_with_cargo_pre_one_semantics() {
+        let cases = [
+            ("0.0.1", "0.0.2", SemverReleaseType::Major),
+            ("0.6.5", "0.6.6", SemverReleaseType::Minor),
+            ("0.6.5", "0.7.0", SemverReleaseType::Major),
+            ("1.2.3", "1.2.4", SemverReleaseType::Patch),
+            ("1.2.3", "1.3.0", SemverReleaseType::Minor),
+            ("1.2.3", "2.0.0", SemverReleaseType::Major),
+        ];
+
+        for (baseline, release, expected) in cases {
+            assert_eq!(
+                classify_release_type(
+                    &Version::parse(baseline).unwrap(),
+                    &Version::parse(release).unwrap()
+                ),
+                expected
+            );
+        }
+    }
 }
