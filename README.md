@@ -74,7 +74,7 @@ This crate collects runtime-agnostic synchronization primitives from spare parts
 * **admission::FairShare** is written from scratch to bound global concurrency while balancing held permits across contending keys.
 * **Barrier** is inspired by `std::sync::Barrier` and `tokio::sync::Barrier`, with a different implementation based on the internal `WaitSet` primitive.
 * **Condvar** is inspired by `std::sync::Condvar` and `async_std::sync::Condvar`, with a fair FIFO waiter queue and standard non-buffered notification semantics.
-* **Latch** is inspired by [`latches`](https://github.com/mirromutth/latches), with a different implementation based on the internal `CountdownState` primitive. No `wait` or `watch` method is provided, since it can be easily implemented by [composing delay futures](https://docs.rs/fastimer/*/fastimer/fn.timeout.html). No sync variant is provided, since it can be easily implemented with block_on of any runtime.
+* **Latch** is inspired by [`latches`](https://github.com/mirromutth/latches), with a different implementation based on the internal `CountdownState` primitive. No sync variant is provided, since it can be easily implemented with block_on of any runtime.
 * **Mutex** is derived from `tokio::sync::Mutex`. No blocking method is provided, since it can be easily implemented with block_on of any runtime.
 * **OnceCell** is derived from `tokio::sync::OnceCell`, but using our own semaphore implementation.
 * **OnceMap** is inspired by `uv-once-map` but the interface and implementation are redesigned.
@@ -82,7 +82,7 @@ This crate collects runtime-agnostic synchronization primitives from spare parts
 * **Semaphore** is derived from `tokio::sync::Semaphore`, without `close` method since it is quite tricky to use. And thus, this semaphore doesn't have the limitation of max permits. Besides, new methods like `forget_exact` are added to fit the specific use case.
 * **WaitGroup** is inspired by [`waitgroup-rs`](https://github.com/laizy/waitgroup-rs), providing different API flavor with a different implementation based on the internal `CountdownState` primitive.
 * **atomicbox** is forked from [`atomicbox`](https://github.com/jorendorff/atomicbox/) at commit 07756444.
-* **broadcast::channel** is derived from `tokio::sync::broadcast::channel`, with a different implementation based on the internal `WaitSet` primitive.
+* **broadcast::overflow::channel** is derived from `tokio::sync::broadcast::channel`, with a different implementation based on the internal `WaitSet` primitive.
 * **oneshot::channel** is derived from [`oneshot`](https://github.com/faern/oneshot), with significant simplifications since we need not support synchronized receiving functions.
 
 Other parts are written from scratch.
