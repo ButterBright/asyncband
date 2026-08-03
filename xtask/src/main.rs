@@ -29,6 +29,7 @@ struct Command {
 impl Command {
     fn run(self) {
         match self.sub {
+            SubCommand::Bench(cmd) => cmd.run(),
             SubCommand::Build(cmd) => cmd.run(),
             SubCommand::Lint(cmd) => cmd.run(),
             SubCommand::Semver(cmd) => cmd.run(),
@@ -39,6 +40,8 @@ impl Command {
 
 #[derive(Subcommand)]
 enum SubCommand {
+    #[clap(about = "Run workspace benchmarks.")]
+    Bench(CommandBench),
     #[clap(about = "Compile workspace packages.")]
     Build(CommandBuild),
     #[clap(about = "Run workspace quality checks.")]
@@ -47,6 +50,15 @@ enum SubCommand {
     Semver(CommandSemver),
     #[clap(about = "Run unit tests.")]
     Test(CommandTest),
+}
+
+#[derive(Parser)]
+struct CommandBench;
+
+impl CommandBench {
+    fn run(self) {
+        run_command(make_bench_cmd());
+    }
 }
 
 #[derive(Parser)]
@@ -220,6 +232,12 @@ fn classify_release_type(baseline: &Version, release: &Version) -> SemverRelease
     } else {
         SemverReleaseType::Major
     }
+}
+
+fn make_bench_cmd() -> StdCommand {
+    let mut cmd = find_command("cargo");
+    cmd.args(["bench", "--workspace", "--bench", "*"]);
+    cmd
 }
 
 fn make_build_cmd(locked: bool) -> StdCommand {
