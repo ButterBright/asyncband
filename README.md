@@ -1,4 +1,4 @@
-# MEA (Make Easy Async)
+# MEA (Modular Essentials for Async)
 
 [![Crates.io][crates-badge]][crates-url]
 [![Documentation][docs-badge]][docs-url]
