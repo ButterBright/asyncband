@@ -6,7 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ## v0.6.7 (2026-08-13)
 
-* Announce the upcoming `asyncband` rebrand.
+### Breaking changes
+
+* Rename the project and published crate from MEA (`mea`) to Asyncband (`asyncband`). Users must update both their dependency declarations and `mea::` paths. No compatibility crate or re-export is provided under the old name.
 
 ## v0.6.6 (2026-08-13)
 
