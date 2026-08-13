@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v0.6.7 (2026-08-13)
+
+* Announce the upcoming `asyncband` rebrand.
+
 ## v0.6.6 (2026-08-13)
 
 ### Bug fixes
