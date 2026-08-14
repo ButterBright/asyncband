@@ -36,7 +36,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 hashbrown = { version = "0.17.1", default-features = false, features = [
   "inline-more",
 ] }
-slab = { version = "0.4.11" }
 
 [dev-dependencies]
 divan = { version = "0.1.21" }

@@ -74,6 +74,7 @@ use std::task::Context;
 use std::task::Poll;
 
 use crate::internal::Mutex;
+use crate::internal::WaitRegistration;
 use crate::internal::WaitSet;
 
 #[cfg(test)]
@@ -254,7 +255,7 @@ impl Barrier {
         };
 
         let fut = BarrierWait {
-            idx: None,
+            registration: None,
             generation,
             barrier: self,
         };
@@ -268,7 +269,7 @@ impl Barrier {
 /// This future will complete when all tasks have reached the barrier point.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 struct BarrierWait<'a> {
-    idx: Option<usize>,
+    registration: Option<WaitRegistration>,
     generation: usize,
     barrier: &'a Barrier,
 }
@@ -286,17 +287,33 @@ impl Future for BarrierWait<'_> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self {
-            idx,
+            registration,
             generation,
             barrier,
         } = self.get_mut();
 
-        let mut state = barrier.state.lock();
-        if *generation < state.generation {
-            Poll::Ready(())
-        } else {
-            state.waiters.register_waker(idx, cx);
-            Poll::Pending
+        let replaced_waker = {
+            let mut state = barrier.state.lock();
+            if *generation < state.generation {
+                // Advancing the generation drains its registrations under this same lock.
+                *registration = None;
+                return Poll::Ready(());
+            }
+            state.waiters.register_waker(registration, cx)
+        };
+        drop(replaced_waker);
+        Poll::Pending
+    }
+}
+
+impl Drop for BarrierWait<'_> {
+    fn drop(&mut self) {
+        if self.registration.is_some() {
+            let removed_waker = {
+                let mut state = self.barrier.state.lock();
+                state.waiters.unregister_waker(&mut self.registration)
+            };
+            drop(removed_waker);
         }
     }
 }

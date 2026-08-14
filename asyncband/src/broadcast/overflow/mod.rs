@@ -72,6 +72,7 @@ use std::task::Poll;
 
 use crate::internal::Mutex;
 use crate::internal::RwLock;
+use crate::internal::WaitRegistration;
 use crate::internal::WaitSet;
 
 #[cfg(test)]
@@ -341,7 +342,7 @@ impl<T: Clone> Receiver<T> {
     pub async fn recv(&mut self) -> Result<T, RecvError> {
         Recv {
             receiver: self,
-            index: None,
+            registration: None,
         }
         .await
     }
@@ -448,20 +449,32 @@ impl<T> Receiver<T> {
 
 struct Recv<'a, T> {
     receiver: &'a mut Receiver<T>,
-    index: Option<usize>,
+    registration: Option<WaitRegistration>,
 }
 
 impl<T: Clone> Future for Recv<'_, T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Self { receiver, index } = self.get_mut();
+        let Self {
+            receiver,
+            registration,
+        } = self.get_mut();
 
         loop {
+            // Senders publish data or closure before draining the current wake epoch. Once a
+            // result is observable, Drop does not need to lock the waiter set again.
             match receiver.try_recv() {
-                Ok(val) => return Poll::Ready(Ok(val)),
-                Err(TryRecvError::Lagged(n)) => return Poll::Ready(Err(RecvError::Lagged(n))),
+                Ok(val) => {
+                    *registration = None;
+                    return Poll::Ready(Ok(val));
+                }
+                Err(TryRecvError::Lagged(n)) => {
+                    *registration = None;
+                    return Poll::Ready(Err(RecvError::Lagged(n)));
+                }
                 Err(TryRecvError::Disconnected) => {
+                    *registration = None;
                     return Poll::Ready(Err(RecvError::Disconnected));
                 }
                 Err(TryRecvError::Empty) => {}
@@ -481,12 +494,27 @@ impl<T: Clone> Future for Recv<'_, T> {
             // Check for Closed
             // Use Acquire to ensure we see all writes before the sender dropped.
             if shared.senders.load(Ordering::Acquire) == 0 {
+                *registration = None;
                 return Poll::Ready(Err(RecvError::Disconnected));
             }
 
             // Register Waker
-            waiters.register_waker(index, cx);
+            let replaced_waker = waiters.register_waker(registration, cx);
+            drop(waiters);
+            drop(replaced_waker);
             return Poll::Pending;
+        }
+    }
+}
+
+impl<T> Drop for Recv<'_, T> {
+    fn drop(&mut self) {
+        if self.registration.is_some() {
+            let removed_waker = {
+                let mut waiters = self.receiver.shared.waiters.lock();
+                waiters.unregister_waker(&mut self.registration)
+            };
+            drop(removed_waker);
         }
     }
 }
