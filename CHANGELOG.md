@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Breaking changes
+
+* Rename `oneshot::Sender::is_closed` and `oneshot::Receiver::is_closed` to `is_disconnected`.
+
 ### Bug fixes
 
 * Release cancelled wait registrations promptly and reclaim fulfilled `Semaphore::forget_exact` debt nodes.

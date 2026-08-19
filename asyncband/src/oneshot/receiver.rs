@@ -67,12 +67,13 @@ impl<T> IntoFuture for Receiver<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Returns true if the associated [`Sender`] was dropped before sending a message, or if the
-    /// message has already been received.
+    /// Returns `true` if the channel is disconnected.
     ///
-    /// If `true` is returned, all future calls to receive the message are guaranteed to return
-    /// [`RecvError`]. Future calls to this method are also guaranteed to return `true`.
-    pub fn is_closed(&self) -> bool {
+    /// This occurs when the associated [`Sender`] is dropped without sending a message, or after
+    /// the message is received.
+    ///
+    /// If `true` is returned, all future receive operations are guaranteed to return an error.
+    pub fn is_disconnected(&self) -> bool {
         // SAFETY: The existence of `self` guarantees that the receiver is still alive. If the
         // sender was dropped, it observed the live receiver and left allocation cleanup to it, so
         // `channel_ptr` remains valid.
