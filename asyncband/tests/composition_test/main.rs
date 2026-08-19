@@ -16,8 +16,11 @@
 // under the License.
 
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use asyncband::barrier::Barrier;
+use asyncband::blocking::FutureExt as _;
 use asyncband::mutex::Mutex;
 use asyncband::oneshot;
 
@@ -50,4 +53,25 @@ async fn public_primitives_compose_across_modules() {
     let mut values = values.lock().await;
     values.sort_unstable();
     assert_eq!(*values, [1, 2]);
+}
+
+#[test]
+fn blocking_bridge_composes_with_public_primitives() {
+    let mutex = Mutex::new(1);
+    *mutex.lock().block_on() += 1;
+    assert_eq!(*mutex.lock().block_on(), 2);
+
+    let (sender, receiver) = oneshot::channel();
+    let producer = thread::spawn(move || sender.send(7).unwrap());
+
+    assert_eq!(receiver.block_on(), Ok(7));
+    producer.join().unwrap();
+}
+
+#[test]
+fn timed_out_wait_cancels_an_asyncband_future() {
+    let (sender, receiver) = oneshot::channel();
+
+    assert_eq!(receiver.wait_timeout(Duration::ZERO), None);
+    assert_eq!(sender.send(7).unwrap_err().into_inner(), 7);
 }

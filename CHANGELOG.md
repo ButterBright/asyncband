@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### New features
+
+* Add an opt-in `asyncband::blocking::FutureExt` bridge with `block_on` and `wait_timeout` methods for waiting on runtime-agnostic futures from synchronous code.
+
 ### Breaking changes
 
 * Gate all exported primitive modules behind same-named opt-in Cargo features and enable no features by default; downstream dependencies must explicitly enable the modules they use.

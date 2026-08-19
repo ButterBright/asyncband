@@ -32,8 +32,8 @@
 //!
 //! # Cargo features
 //!
-//! The crate enables no primitives by default. Each public module has a same-named opt-in feature,
-//! so applications only compile the primitives they use:
+//! The crate enables no primitives or utilities by default. Each public module has a same-named
+//! opt-in feature, so applications only compile the APIs they use:
 //!
 //! ```toml
 //! asyncband = { version = "0.7", features = ["mutex", "oneshot"] }
@@ -52,6 +52,12 @@
 //! * Task coordination: `Barrier`, `Latch`, `WaitGroup`, and graceful shutdown.
 //! * Channels: oneshot, bounded and unbounded MPSC, and overflowing broadcast channels.
 //! * Workload control: `Semaphore`, fair-share admission control, and duplicate-call suppression.
+//!
+//! # Synchronous interoperability
+//!
+//! The optional [`blocking`] module lets synchronous code wait indefinitely or with a timeout on a
+//! single runtime-agnostic future. It is an interoperability utility rather than an async primitive
+//! or a general-purpose runtime.
 //!
 //! # Runtime Agnostic
 //!
@@ -85,6 +91,8 @@ mod internal;
 pub mod admission;
 #[cfg(feature = "barrier")]
 pub mod barrier;
+#[cfg(feature = "blocking")]
+pub mod blocking;
 #[cfg(feature = "broadcast")]
 pub mod broadcast;
 #[cfg(feature = "condvar")]
