@@ -15,19 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::OnceLock;
 
-use super::WaitGroup;
-use crate::internal::CountdownState;
+use tokio::runtime::Runtime;
 
-// This test stays next to the implementation because it inspects private state.
-
-#[test]
-#[should_panic(expected = "WaitGroup counter overflow")]
-fn clone_panics_on_counter_overflow() {
-    let wg = WaitGroup {
-        state: Arc::new(CountdownState::new(u32::MAX)),
-    };
-
-    let _ = wg.clone();
+pub fn test_runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| Runtime::new().unwrap())
 }

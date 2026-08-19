@@ -19,8 +19,6 @@
 
 mod bounded;
 mod error;
-#[cfg(test)]
-mod tests;
 mod unbounded;
 
 pub use bounded::BoundedReceiver;

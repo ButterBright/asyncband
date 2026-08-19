@@ -15,19 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use std::task::Waker;
 
-use super::WaitGroup;
-use crate::internal::CountdownState;
-
-// This test stays next to the implementation because it inspects private state.
-
-#[test]
-#[should_panic(expected = "WaitGroup counter overflow")]
-fn clone_panics_on_counter_overflow() {
-    let wg = WaitGroup {
-        state: Arc::new(CountdownState::new(u32::MAX)),
-    };
-
-    let _ = wg.clone();
+pub(crate) fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+    future.poll(&mut Context::from_waker(Waker::noop()))
 }
