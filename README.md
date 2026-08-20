@@ -21,8 +21,8 @@
 [msrv-badge]: https://img.shields.io/badge/MSRV-1.86-green?logo=rust
 [license-badge]: https://img.shields.io/crates/l/asyncband
 [license-url]: LICENSE
-[actions-badge]: https://github.com/fast/asyncband/actions/workflows/ci.yml/badge.svg
-[actions-url]: https://github.com/fast/asyncband/actions/workflows/ci.yml
+[actions-badge]: https://github.com/apache/asyncband/actions/workflows/ci.yml/badge.svg
+[actions-url]: https://github.com/apache/asyncband/actions/workflows/ci.yml
 
 ## Overview
 
