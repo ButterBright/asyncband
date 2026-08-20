@@ -15,21 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Asynchronous primitives for one-time async coordination.
-//!
-//! The module currently provides:
-//!
-//! * [`Once`]: A primitive that ensures a one-time asynchronous operation runs at most once, even
-//!   when called concurrently.
-//! * [`OnceCell`]: A cell that can be written to at most once, storing a value produced
-//!   asynchronously.
-//! * [`OnceMap`]: A hash map that runs computation only once for each key and stores the result.
+//! Asynchronous primitives for one-time coordination.
 
+#[cfg(feature = "once")]
 #[allow(clippy::module_inception)]
 mod once;
+#[cfg(feature = "once-cell")]
 mod once_cell;
+#[cfg(feature = "once-map")]
 mod once_map;
 
+#[cfg(feature = "once")]
 pub use self::once::Once;
+#[cfg(feature = "once-cell")]
 pub use self::once_cell::OnceCell;
+#[cfg(feature = "once-map")]
 pub use self::once_map::OnceMap;

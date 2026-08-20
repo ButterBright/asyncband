@@ -20,11 +20,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use asyncband::once::Once;
+use tests_integration::test_runtime;
 use tokio_test::assert_ready;
-
-#[path = "../support/runtime.rs"]
-mod support;
-use support::test_runtime;
 
 #[tokio::test]
 async fn test_call_once_runs_only_once() {

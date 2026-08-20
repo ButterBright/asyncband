@@ -16,26 +16,38 @@
 # under the License.
 
 [package]
-name = "x"
+name = "benchmarks"
 publish = false
 
 edition.workspace = true
-homepage.workspace = true
-license.workspace = true
-readme.workspace = true
-repository.workspace = true
 rust-version.workspace = true
 
-[dependencies]
-cargo_metadata = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-semver = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-ureq = { workspace = true, default-features = false, features = [
-  "json",
-  "rustls",
+[dev-dependencies]
+asyncband = { workspace = true, features = [
+  "admission",
+  "barrier",
+  "blocking",
+  "broadcast",
+  "condvar",
+  "latch",
+  "mpsc",
+  "mutex",
+  "once",
+  "once-cell",
+  "once-map",
+  "oneshot",
+  "rwlock",
+  "semaphore",
+  "shutdown",
+  "singleflight",
+  "waitgroup",
 ] }
-which = { workspace = true }
+divan = { workspace = true }
+
+[[bench]]
+harness = false
+name = "benchmarks"
+path = "main.rs"
 
 [lints]
 workspace = true
