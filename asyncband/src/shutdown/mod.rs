@@ -17,129 +17,179 @@
 
 //! Coordination primitives for graceful task shutdown.
 //!
-//! This module provides [`new_pair`] to create a pair of handles for managing shutdown signals:
+//! This module provides [`new`] to create a coordinator and an initial completion guard:
 //!
-//! * [`ShutdownSend`] can send a shutdown signal, and can wait for all the tasks to finish.
-//! * [`ShutdownRecv`] can wait for the shutdown signal, and should be dropped when the task is
-//!   done, which will notify the sender on all the tasks finished.
-//! * [`ShutdownWatch`] can wait for the shutdown signal without blocking
-//!   [`ShutdownSend::await_shutdown`].
+//! * [`Shutdown`] can request shutdown and wait for all guards to be dropped.
+//! * [`ShutdownGuard`] keeps shutdown completion pending until it is dropped and can observe the
+//!   shutdown request.
+//! * [`ShutdownWatch`] can observe the shutdown request without delaying completion.
 //!
 //! Internally, the shutdown signal is implemented using a countdown latch, and the task completion
-//! is tracked using a wait group. [`ShutdownSend`] is cloneable, allowing multiple sources to send
-//! the shutdown signal; [`ShutdownRecv`] is also cloneable, allowing multiple tasks to wait for the
-//! same shutdown signal.
+//! is tracked using a wait group. [`Shutdown`] is cloneable, allowing multiple control handles to
+//! request shutdown or wait for completion. [`ShutdownGuard`] is also cloneable; each clone keeps
+//! completion pending independently until it is dropped.
 //!
-//! [`ShutdownSend::await_shutdown`] would block until all the tasks are done, i.e., all the
-//! [`ShutdownRecv`]s dropped.
+//! Awaiting [`Shutdown`] requests shutdown and then waits until all [`ShutdownGuard`] handles have
+//! been dropped. The request is made when the future is first polled, not when the value is created
+//! or converted into a future. Call [`Shutdown::request_shutdown`] first when the request must be
+//! issued before entering a cancellable operation such as `tokio::select!`.
 //!
 //! # Examples
 //!
 //! ```
 //! # #[tokio::main]
 //! # async fn main() {
-//! let (tx, rx) = asyncband::shutdown::new_pair();
+//! let (shutdown, guard) = asyncband::shutdown::new();
 //!
 //! for i in 0..3 {
-//!     let rx = rx.clone();
+//!     let guard = guard.clone();
 //!     tokio::spawn(async move {
 //!         println!("Task {} starting", i);
-//!         rx.is_shutdown().await;
+//!         guard.shutdown_requested().await;
 //!         println!("Task {} done", i);
 //!     });
 //! }
-//! drop(rx);
+//! drop(guard);
 //!
-//! tx.shutdown();
-//! tx.await_shutdown().await;
+//! shutdown.await;
 //! # }
 //! ```
 
 use std::future::Future;
 use std::future::IntoFuture;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Context;
+use std::task::Poll;
 
 use crate::latch::Latch;
 use crate::waitgroup::Wait;
 use crate::waitgroup::WaitGroup;
 
-/// Create a pair of handles for managing shutdown signals.
+/// Creates a graceful shutdown coordinator and an initial completion guard.
 ///
 /// See the [module level documentation](self) for more.
-pub fn new_pair() -> (ShutdownSend, ShutdownRecv) {
+pub fn new() -> (Shutdown, ShutdownGuard) {
     let latch = Arc::new(Latch::new(1));
     let wg = WaitGroup::new();
-    let send = ShutdownSend {
+    let shutdown = Shutdown {
         latch: latch.clone(),
         wait: wg.clone().into_future(),
     };
-    let recv = ShutdownRecv {
+    let guard = ShutdownGuard {
         latch,
-        _wait_group: wg,
+        wait_group: wg,
     };
-    (send, recv)
+    (shutdown, guard)
 }
 
-/// A handle for sending shutdown signals.
+/// Coordinates a graceful shutdown request and completion.
+///
+/// Awaiting this handle requests shutdown and waits for every [`ShutdownGuard`] to be dropped. The
+/// request is issued on the first poll. Merely creating, moving, or dropping an unpolled handle
+/// does not request shutdown.
+///
+/// Once the handle has been polled, the shutdown request is sticky even if the future is cancelled
+/// or dropped. If shutdown must be requested before a `select` can choose another branch, call
+/// [`request_shutdown`](Self::request_shutdown) before entering the `select`:
+///
+/// ```
+/// # #[tokio::main]
+/// # async fn main() {
+/// let (shutdown, guard) = asyncband::shutdown::new();
+/// let worker = tokio::spawn(async move {
+///     guard.shutdown_requested().await;
+/// });
+///
+/// shutdown.request_shutdown();
+///
+/// tokio::select! {
+///     _ = shutdown => {}
+///     _ = std::future::pending::<()>() => {}
+/// }
+///
+/// worker.await.unwrap();
+/// # }
+/// ```
 ///
 /// See the [module level documentation](self) for more.
+#[must_use = "shutdown is not requested unless this handle is polled or request_shutdown is called"]
 #[derive(Debug, Clone)]
-pub struct ShutdownSend {
+pub struct Shutdown {
     latch: Arc<Latch>,
     wait: Wait,
 }
 
-impl ShutdownSend {
-    /// Send a shutdown signal to all [`ShutdownRecv`] handles.
-    pub fn shutdown(&self) {
+impl Shutdown {
+    /// Requests shutdown for all [`ShutdownGuard`] and [`ShutdownWatch`] handles.
+    ///
+    /// The request is sticky and this method is idempotent. Current and future observers from this
+    /// pair will see the request.
+    pub fn request_shutdown(&self) {
         self.latch.count_down();
-    }
-
-    /// Wait for all [`ShutdownRecv`] handles to be dropped.
-    pub async fn await_shutdown(self) {
-        self.wait.await;
     }
 }
 
-/// A handle for receiving shutdown signals.
+impl Future for Shutdown {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.request_shutdown();
+        Pin::new(&mut this.wait).poll(cx)
+    }
+}
+
+/// Keeps shutdown completion pending until the guard is dropped.
 ///
 /// See the [module level documentation](self) for more.
 #[derive(Debug, Clone)]
-pub struct ShutdownRecv {
+pub struct ShutdownGuard {
     latch: Arc<Latch>,
-    // Keeps this receiver registered as a shutdown participant until it is dropped.
-    _wait_group: WaitGroup,
+    #[expect(
+        dead_code,
+        reason = "keeps shutdown completion pending until this guard is dropped"
+    )]
+    wait_group: WaitGroup,
 }
 
-impl ShutdownRecv {
-    /// Returns a handle for watching the shutdown signal.
+impl ShutdownGuard {
+    /// Returns a handle that observes the shutdown request without participating in completion.
     ///
-    /// The returned handle does not block [`ShutdownSend::await_shutdown`].
+    /// The returned handle does not delay shutdown completion, but this guard still does. Use
+    /// [`into_watch`](Self::into_watch) to stop keeping completion pending.
     pub fn watch(&self) -> ShutdownWatch {
         ShutdownWatch {
             latch: self.latch.clone(),
         }
     }
 
-    /// Returns whether the shutdown signal has been received.
-    pub fn is_shutdown_now(&self) -> bool {
+    /// Converts this guard into a watch that does not delay completion.
+    pub fn into_watch(self) -> ShutdownWatch {
+        let Self { latch, .. } = self;
+        ShutdownWatch { latch }
+    }
+
+    /// Returns whether shutdown has been requested.
+    pub fn is_shutdown_requested(&self) -> bool {
         self.latch.try_wait().is_ok()
     }
 
-    /// Returns a future that resolves when the shutdown signal is received.
-    pub async fn is_shutdown(&self) {
+    /// Waits until shutdown is requested.
+    pub async fn shutdown_requested(&self) {
         self.latch.wait().await;
     }
 
-    /// Returns an owned future that resolves when the shutdown signal is received.
+    /// Returns an owned future that resolves when shutdown is requested.
     ///
-    /// The returned future has no lifetime constraints.
-    pub fn is_shutdown_owned(&self) -> impl Future<Output = ()> + 'static {
+    /// The returned future has no lifetime constraints and does not keep shutdown completion
+    /// pending.
+    pub fn shutdown_requested_owned(&self) -> impl Future<Output = ()> + 'static {
         self.latch.clone().wait_owned()
     }
 }
 
-/// A handle for watching shutdown signals without participating in shutdown completion.
+/// Observes graceful shutdown requests without participating in completion.
 ///
 /// See the [module level documentation](self) for more.
 #[derive(Debug, Clone)]
@@ -148,20 +198,20 @@ pub struct ShutdownWatch {
 }
 
 impl ShutdownWatch {
-    /// Returns whether the shutdown signal has been received.
-    pub fn is_shutdown_now(&self) -> bool {
+    /// Returns whether shutdown has been requested.
+    pub fn is_shutdown_requested(&self) -> bool {
         self.latch.try_wait().is_ok()
     }
 
-    /// Returns a future that resolves when the shutdown signal is received.
-    pub async fn is_shutdown(&self) {
+    /// Waits until shutdown is requested.
+    pub async fn shutdown_requested(&self) {
         self.latch.wait().await;
     }
 
-    /// Returns an owned future that resolves when the shutdown signal is received.
+    /// Returns an owned future that resolves when shutdown is requested.
     ///
     /// The returned future has no lifetime constraints.
-    pub fn is_shutdown_owned(&self) -> impl Future<Output = ()> + 'static {
+    pub fn shutdown_requested_owned(&self) -> impl Future<Output = ()> + 'static {
         self.latch.clone().wait_owned()
     }
 }
