@@ -16,43 +16,22 @@
 # under the License.
 
 [package]
-name = "tests-integration"
+name = "examples"
 publish = false
 
 edition.workspace = true
 rust-version.workspace = true
 
+[package.metadata.release]
+release = false
+
 [dependencies]
-tokio = { workspace = true, features = ["full"] }
-
-[dev-dependencies]
-asyncband = { workspace = true, features = [
-  "barrier",
-  "blocking",
-  "condvar",
-  "latch",
-  "lazy-cell",
-  "mpsc",
-  "mutex",
-  "once",
-  "once-cell",
-  "once-map",
-  "oneshot",
-  "pool",
-  "rwlock",
-  "semaphore",
-  "shutdown",
-  "singleflight",
-  "waitgroup",
-] }
-pollster = { workspace = true, features = ["macro"] }
-tokio-test = { workspace = true }
-
-[lib]
-bench = false
-doc = false
-doctest = false
-test = false
+asyncband = { workspace = true, features = ["lazy-cell", "once-cell"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "once_cell_vs_lazy_cell"
+path = "src/once_cell_vs_lazy_cell.rs"

@@ -17,6 +17,8 @@
 
 //! Asynchronous primitives for one-time coordination.
 
+#[cfg(feature = "lazy-cell")]
+mod lazy_cell;
 #[cfg(feature = "once")]
 mod once;
 #[cfg(feature = "once-cell")]
@@ -24,6 +26,8 @@ mod once_cell;
 #[cfg(feature = "once-map")]
 mod once_map;
 
+#[cfg(feature = "lazy-cell")]
+pub use self::lazy_cell::LazyCell;
 #[cfg(feature = "once")]
 pub use self::once::Once;
 #[cfg(feature = "once-cell")]
