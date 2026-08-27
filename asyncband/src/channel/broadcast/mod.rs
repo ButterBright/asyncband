@@ -15,13 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod broadcast;
-mod mpsc;
+//! Broadcast channels grouped by producer topology.
 
-#[allow(dead_code)]
-#[path = "../asyncband/support.rs"]
-mod support;
-
-fn main() {
-    divan::main();
-}
+pub mod mpmc;

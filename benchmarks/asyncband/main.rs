@@ -17,6 +17,7 @@
 
 mod barrier;
 mod blocking;
+mod broadcast;
 mod condvar;
 mod latch;
 mod mpsc;
