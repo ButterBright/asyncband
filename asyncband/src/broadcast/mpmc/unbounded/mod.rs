@@ -25,8 +25,9 @@
 //!
 //! This channel does not impose a capacity limit. A slow or stalled receiver can cause the
 //! buffer to grow without bound, because messages are retained until every active receiver has
-//! consumed them or the receiver is dropped. Use [`UnboundedSender::buffer_len`] to monitor the
-//! number of messages currently retained by the shared buffer.
+//! consumed them or the receiver is dropped. Use
+//! [`UnboundedSender::retained_message_count`] to monitor the number of messages currently retained
+//! by the channel.
 //!
 //! The buffer keeps the capacity a steady workload needs, so a channel that repeatedly fills and
 //! drains does not reallocate. Capacity grown for a one-off burst is released once a later cycle
@@ -80,11 +81,11 @@
 //! // One receiver draining the channel does not discard what the other has not read yet.
 //! assert_eq!(rx1.recv().await, Ok(1));
 //! assert_eq!(rx1.recv().await, Ok(2));
-//! assert_eq!(tx.buffer_len(), 2);
+//! assert_eq!(tx.retained_message_count(), 2);
 //!
 //! assert_eq!(rx2.recv().await, Ok(1));
 //! assert_eq!(rx2.recv().await, Ok(2));
-//! assert_eq!(tx.buffer_len(), 0);
+//! assert_eq!(tx.retained_message_count(), 0);
 //! # }
 //! ```
 
@@ -104,6 +105,7 @@ use crate::internal::arena::SlotId;
 use crate::internal::mutex::Mutex;
 use crate::internal::waitset::WaitSet;
 use crate::internal::waitset::WakerToken;
+use crate::internal::waitset::wake_all;
 
 #[cfg(test)]
 mod tests;
@@ -146,14 +148,14 @@ pub fn unbounded<T: Clone>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
 /// Error returned by [`UnboundedReceiver::recv`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecvError {
-    /// The sender has become disconnected, and there will never be any more data received on it.
+    /// All senders have been dropped, and this receiver has no remaining messages.
     Disconnected,
 }
 
 impl fmt::Display for RecvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RecvError::Disconnected => write!(f, "receiving on a closed channel"),
+            RecvError::Disconnected => write!(f, "receiving on a disconnected channel"),
         }
     }
 }
@@ -163,10 +165,9 @@ impl std::error::Error for RecvError {}
 /// Error returned by [`UnboundedReceiver::try_recv`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryRecvError {
-    /// This channel is currently empty, but the sender(s) have not yet disconnected, so data may
-    /// yet become available.
+    /// No message is currently available, but at least one sender remains.
     Empty,
-    /// The sender has become disconnected, and there will never be any more data received on it.
+    /// All senders have been dropped, and this receiver has no remaining messages.
     Disconnected,
 }
 
@@ -174,7 +175,7 @@ impl fmt::Display for TryRecvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TryRecvError::Empty => write!(f, "receiving on an empty channel"),
-            TryRecvError::Disconnected => write!(f, "receiving on a closed channel"),
+            TryRecvError::Disconnected => write!(f, "receiving on a disconnected channel"),
         }
     }
 }
@@ -364,10 +365,10 @@ struct Shared<T> {
     senders: AtomicUsize,
 }
 
-/// A sender handle to the broadcast channel.
+/// The sending side of an unbounded broadcast channel.
 ///
-/// The sender can be cloned to create multiple producers. When all senders are dropped,
-/// the channel is closed.
+/// The sender can be cloned to create multiple producers. Dropping the final sender disconnects
+/// the channel. Each receiver may drain its own buffered messages before observing disconnection.
 pub struct UnboundedSender<T> {
     shared: Arc<Shared<T>>,
 }
@@ -375,8 +376,8 @@ pub struct UnboundedSender<T> {
 impl<T> Clone for UnboundedSender<T> {
     fn clone(&self) -> Self {
         // Relaxed is enough because this count publishes nothing on its own: receivers read it
-        // only to decide whether the channel is closed, and every message it could hide is
-        // published under `inner`, which a receiver holds before it observes the count.
+        // only to decide whether any sender remains, and every message it could hide is published
+        // under `inner`, which a receiver holds before it observes the count.
         self.shared.senders.fetch_add(1, Ordering::Relaxed);
         Self {
             shared: self.shared.clone(),
@@ -394,12 +395,9 @@ impl<T> Drop for UnboundedSender<T> {
     fn drop(&mut self) {
         match self.shared.senders.fetch_sub(1, Ordering::AcqRel) {
             1 => {
-                // If this is the last sender, we need to wake up the receiver so it can
-                // observe the disconnected state.
+                // Wake every parked receiver so it can observe the channel's disconnected state.
                 let wakers = self.shared.inner.lock().waiters.take_wakers();
-                for waker in wakers {
-                    waker.wake();
-                }
+                wake_all(wakers);
             }
             _ => {
                 // there are still other senders left, do nothing
@@ -461,15 +459,16 @@ impl<T> UnboundedSender<T> {
 
         // Notify all waiting receivers. An unsent message is dropped here too, once the lock is
         // released.
-        for waker in wakers {
-            waker.wake();
-        }
+        wake_all(wakers);
     }
 
-    /// Returns the number of messages currently retained by the shared buffer.
+    /// Returns the number of messages currently retained by the channel.
     ///
     /// This is not the number of messages any single receiver can still read. It is the shared
     /// backlog kept alive by the slowest active receiver.
+    ///
+    /// The returned value is an instantaneous snapshot. It is suitable for diagnostics and soft
+    /// flow-control decisions, but concurrent sends and receives may change it immediately.
     ///
     /// # Examples
     ///
@@ -478,34 +477,13 @@ impl<T> UnboundedSender<T> {
     ///
     /// let (tx, mut rx) = mpmc::unbounded();
     /// tx.send(10);
-    /// assert_eq!(tx.buffer_len(), 1);
+    /// assert_eq!(tx.retained_message_count(), 1);
     ///
     /// assert_eq!(rx.try_recv(), Ok(10));
-    /// assert_eq!(tx.buffer_len(), 0);
+    /// assert_eq!(tx.retained_message_count(), 0);
     /// ```
-    pub fn buffer_len(&self) -> usize {
+    pub fn retained_message_count(&self) -> usize {
         self.shared.inner.lock().buffer.len()
-    }
-
-    /// Returns the number of active receivers.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use asyncband::broadcast::mpmc;
-    ///
-    /// let (tx, rx) = mpmc::unbounded::<i32>();
-    /// assert_eq!(tx.receiver_count(), 1);
-    ///
-    /// let rx2 = tx.subscribe();
-    /// assert_eq!(tx.receiver_count(), 2);
-    ///
-    /// drop(rx);
-    /// drop(rx2);
-    /// assert_eq!(tx.receiver_count(), 0);
-    /// ```
-    pub fn receiver_count(&self) -> usize {
-        self.shared.inner.lock().receivers.len()
     }
 
     /// Creates a new receiver that starts receiving messages from the current tail of the channel.
@@ -536,7 +514,7 @@ impl<T> UnboundedSender<T> {
     }
 }
 
-/// A receiver handle to the broadcast channel.
+/// A receiver for an unbounded broadcast channel.
 ///
 /// Each receiver sees every message sent to the channel while the receiver is active.
 pub struct UnboundedReceiver<T> {
@@ -566,8 +544,8 @@ impl<T: Clone> UnboundedReceiver<T> {
     /// # Returns
     ///
     /// * `Ok(T)`: The next message.
-    /// * `Err(RecvError::Disconnected)`: All senders have been dropped and no more messages are
-    ///   available.
+    /// * `Err(RecvError::Disconnected)`: All senders have been dropped and this receiver has no
+    ///   remaining messages.
     ///
     /// # Cancel safety
     ///
@@ -601,8 +579,8 @@ impl<T: Clone> UnboundedReceiver<T> {
     ///
     /// * `Ok(T)`: The next message.
     /// * `Err(TryRecvError::Empty)`: No message is currently available.
-    /// * `Err(TryRecvError::Disconnected)`: All senders have been dropped and no more messages are
-    ///   available.
+    /// * `Err(TryRecvError::Disconnected)`: All senders have been dropped and this receiver has no
+    ///   remaining messages.
     ///
     /// # Examples
     ///
@@ -689,8 +667,12 @@ impl<T> UnboundedReceiver<T> {
 
     /// Returns the number of messages this receiver can still read.
     ///
-    /// This count is specific to this receiver, unlike [`UnboundedSender::buffer_len`], which
-    /// reports the shared backlog retained by the slowest active receiver.
+    /// This count is specific to this receiver, unlike
+    /// [`UnboundedSender::retained_message_count`], which reports the shared backlog retained by
+    /// the slowest active receiver.
+    ///
+    /// The returned value is an instantaneous snapshot. It is suitable for detecting that this
+    /// receiver is falling behind, but concurrent sends may change it immediately.
     ///
     /// # Examples
     ///
@@ -698,39 +680,22 @@ impl<T> UnboundedReceiver<T> {
     /// use asyncband::broadcast::mpmc;
     ///
     /// let (tx, mut rx) = mpmc::unbounded();
-    /// assert_eq!(rx.len(), 0);
+    /// assert_eq!(rx.unread_message_count(), 0);
     ///
     /// tx.send(10);
     /// tx.send(20);
-    /// assert_eq!(rx.len(), 2);
+    /// assert_eq!(rx.unread_message_count(), 2);
     ///
     /// assert_eq!(rx.try_recv(), Ok(10));
-    /// assert_eq!(rx.len(), 1);
+    /// assert_eq!(rx.unread_message_count(), 1);
     /// ```
-    pub fn len(&self) -> usize {
+    pub fn unread_message_count(&self) -> usize {
         let inner = self.shared.inner.lock();
         let head = *inner
             .receivers
             .get(self.key)
             .expect("active broadcast receiver must be registered");
         usize::try_from(inner.tail - head).expect("unread broadcast message count exceeds usize")
-    }
-
-    /// Returns `true` if this receiver has no currently available messages.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use asyncband::broadcast::mpmc;
-    ///
-    /// let (tx, rx) = mpmc::unbounded();
-    /// assert!(rx.is_empty());
-    ///
-    /// tx.send(10);
-    /// assert!(!rx.is_empty());
-    /// ```
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
@@ -765,7 +730,7 @@ impl<T: Clone> Future for Recv<'_, T> {
 
         // One critical section decides between all three outcomes. Senders append messages and
         // drain the wait set under this same lock, so registering here cannot miss a wake-up and
-        // cannot observe a closed channel that still has a message for this receiver.
+        // cannot report disconnection while a message remains for this receiver.
         let received = {
             let mut inner = receiver.shared.inner.lock();
 

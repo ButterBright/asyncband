@@ -42,7 +42,7 @@ impl<T> SendError<T> {
 
 impl<T> fmt::Display for SendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("sending on a closed channel")
+        f.write_str("sending on a disconnected channel")
     }
 }
 
@@ -54,16 +54,16 @@ impl<T> fmt::Debug for SendError<T> {
 
 impl<T> std::error::Error for SendError<T> {}
 
-/// An error returned when every sender has disconnected and no unseen value remains.
+/// An error returned after all senders have been dropped and no unseen value remains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecvError {
-    /// Every sender has disconnected, so the current value will never change again.
+    /// All senders have been dropped, so the current value will never change again.
     Disconnected,
 }
 
 impl fmt::Display for RecvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("receiving on a closed channel")
+        f.write_str("receiving on a disconnected channel")
     }
 }
 

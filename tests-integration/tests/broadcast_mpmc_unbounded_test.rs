@@ -55,8 +55,7 @@ impl Drop for Reentrant {
     fn drop(&mut self) {
         if let Some(channel) = &self.channel {
             // Deadlocks if the channel still holds its lock while dropping reclaimed messages.
-            let _ = channel.buffer_len();
-            let _ = channel.receiver_count();
+            let _ = channel.retained_message_count();
         }
     }
 }
@@ -147,7 +146,7 @@ fn test_try_recv() {
     assert_eq!(rx.try_recv(), Ok(10));
     assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
 
-    // Closed
+    // Disconnected
     drop(tx);
     assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
 }
@@ -165,33 +164,33 @@ async fn test_slow_receiver_keeps_every_message() {
     for i in 0..1024 {
         assert_eq!(rx1.recv().await, Ok(i));
     }
-    assert_eq!(tx.buffer_len(), 1024);
+    assert_eq!(tx.retained_message_count(), 1024);
 
     for i in 0..1024 {
         assert_eq!(rx2.recv().await, Ok(i));
     }
-    assert_eq!(tx.buffer_len(), 0);
+    assert_eq!(tx.retained_message_count(), 0);
 }
 
 #[tokio::test]
-async fn buffer_len_tracks_the_slowest_receiver() {
+async fn retained_message_count_tracks_the_slowest_receiver() {
     let (tx, mut rx1) = unbounded();
     let mut rx2 = tx.subscribe();
 
     tx.send(1);
     tx.send(2);
-    assert_eq!(tx.buffer_len(), 2);
+    assert_eq!(tx.retained_message_count(), 2);
 
     // Reclaiming waits for the slowest receiver, message by message.
     assert_eq!(rx1.recv().await, Ok(1));
-    assert_eq!(tx.buffer_len(), 2);
+    assert_eq!(tx.retained_message_count(), 2);
     assert_eq!(rx2.recv().await, Ok(1));
-    assert_eq!(tx.buffer_len(), 1);
+    assert_eq!(tx.retained_message_count(), 1);
 
     assert_eq!(rx1.recv().await, Ok(2));
-    assert_eq!(tx.buffer_len(), 1);
+    assert_eq!(tx.retained_message_count(), 1);
     assert_eq!(rx2.recv().await, Ok(2));
-    assert_eq!(tx.buffer_len(), 0);
+    assert_eq!(tx.retained_message_count(), 0);
 }
 
 #[tokio::test]
@@ -205,10 +204,10 @@ async fn test_dropping_a_lagging_receiver_releases_its_backlog() {
     for i in 0..128 {
         assert_eq!(rx1.recv().await, Ok(i));
     }
-    assert_eq!(tx.buffer_len(), 128);
+    assert_eq!(tx.retained_message_count(), 128);
 
     drop(rx2);
-    assert_eq!(tx.buffer_len(), 0);
+    assert_eq!(tx.retained_message_count(), 0);
 }
 
 #[tokio::test]
@@ -219,17 +218,17 @@ async fn resubscribe_keeps_the_original_receivers_backlog() {
     tx.send(2);
 
     let mut rx2 = rx.resubscribe();
-    assert_eq!(tx.buffer_len(), 2);
+    assert_eq!(tx.retained_message_count(), 2);
 
     tx.send(3);
 
     assert_eq!(rx2.recv().await, Ok(3));
-    assert_eq!(tx.buffer_len(), 3);
+    assert_eq!(tx.retained_message_count(), 3);
 
     assert_eq!(rx.recv().await, Ok(1));
     assert_eq!(rx.recv().await, Ok(2));
     assert_eq!(rx.recv().await, Ok(3));
-    assert_eq!(tx.buffer_len(), 0);
+    assert_eq!(tx.retained_message_count(), 0);
 }
 
 #[tokio::test]
@@ -239,7 +238,7 @@ async fn send_without_receivers_does_not_buffer() {
 
     tx.send(1);
     tx.send(2);
-    assert_eq!(tx.buffer_len(), 0);
+    assert_eq!(tx.retained_message_count(), 0);
 
     let mut rx = tx.subscribe();
     assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
@@ -249,33 +248,27 @@ async fn send_without_receivers_does_not_buffer() {
 }
 
 #[test]
-fn receiver_count_and_len_track_each_receiver() {
+fn unread_message_count_tracks_each_receiver() {
     let (tx, mut rx1) = unbounded();
-    assert_eq!(tx.receiver_count(), 1);
-    assert_eq!(rx1.len(), 0);
-    assert!(rx1.is_empty());
+    assert_eq!(rx1.unread_message_count(), 0);
 
     tx.send(1);
     tx.send(2);
-    assert_eq!(rx1.len(), 2);
-    assert!(!rx1.is_empty());
+    assert_eq!(rx1.unread_message_count(), 2);
 
     let mut rx2 = tx.subscribe();
-    assert_eq!(tx.receiver_count(), 2);
-    assert_eq!(rx2.len(), 0);
-    assert!(rx2.is_empty());
+    assert_eq!(rx2.unread_message_count(), 0);
 
     tx.send(3);
-    assert_eq!(rx1.len(), 3);
-    assert_eq!(rx2.len(), 1);
+    assert_eq!(rx1.unread_message_count(), 3);
+    assert_eq!(rx2.unread_message_count(), 1);
 
     assert_eq!(rx2.try_recv(), Ok(3));
-    assert_eq!(rx2.len(), 0);
+    assert_eq!(rx2.unread_message_count(), 0);
     drop(rx2);
-    assert_eq!(tx.receiver_count(), 1);
 
     assert_eq!(rx1.try_recv(), Ok(1));
-    assert_eq!(rx1.len(), 2);
+    assert_eq!(rx1.unread_message_count(), 2);
 }
 
 #[test]
@@ -331,7 +324,7 @@ fn panicking_clone_leaves_the_channel_consistent() {
     assert_eq!(rx1.try_recv().unwrap().value, 2);
     assert_eq!(rx2.try_recv().unwrap().value, 1);
     assert_eq!(rx2.try_recv().unwrap().value, 2);
-    assert_eq!(tx.buffer_len(), 0);
+    assert_eq!(tx.retained_message_count(), 0);
     assert_eq!(rx1.try_recv().unwrap_err(), TryRecvError::Empty);
 }
 
@@ -477,7 +470,7 @@ fn parked_recv_wakes_when_the_last_sender_drops() {
 }
 
 #[test]
-fn parked_recv_prefers_buffered_messages_over_disconnect() {
+fn parked_recv_prefers_buffered_messages_over_disconnection() {
     let (tx, mut rx) = unbounded();
     let tracker = Arc::new(TrackWake(AtomicUsize::new(0)));
     let waker = Waker::from(tracker);
@@ -495,7 +488,7 @@ fn parked_recv_prefers_buffered_messages_over_disconnect() {
 }
 
 #[tokio::test]
-async fn recv_drains_buffered_messages_before_reporting_disconnect() {
+async fn recv_drains_buffered_messages_before_reporting_disconnection() {
     let (tx, mut rx) = unbounded();
 
     tx.send(1);
@@ -508,7 +501,7 @@ async fn recv_drains_buffered_messages_before_reporting_disconnect() {
 }
 
 #[tokio::test]
-async fn recv_reports_disconnect_without_any_message() {
+async fn recv_reports_disconnection_without_any_message() {
     let (tx, mut rx) = unbounded::<()>();
     drop(tx);
     assert_eq!(rx.recv().await, Err(RecvError::Disconnected));
@@ -593,16 +586,22 @@ fn randomized_operations_track_the_reference_model() {
                 _ => {}
             }
 
-            assert_eq!(tx.receiver_count(), model.len(), "seed {seed}");
             let retained = model
                 .iter()
                 .map(|(_, cursor)| *cursor)
                 .min()
                 .map_or(0, |slowest| tail - slowest);
-            assert_eq!(tx.buffer_len(), retained as usize, "seed {seed}");
+            assert_eq!(
+                tx.retained_message_count(),
+                retained as usize,
+                "seed {seed}"
+            );
             for (receiver, cursor) in &model {
-                assert_eq!(receiver.len(), (tail - cursor) as usize, "seed {seed}");
-                assert_eq!(receiver.is_empty(), *cursor == tail, "seed {seed}");
+                assert_eq!(
+                    receiver.unread_message_count(),
+                    (tail - cursor) as usize,
+                    "seed {seed}"
+                );
             }
         }
     }

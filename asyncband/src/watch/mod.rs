@@ -28,7 +28,7 @@
 //! version observed. Because snapshots do not retain the channel's internal lock, they may be kept
 //! or moved independently while senders continue publishing newer values.
 //!
-//! If every sender disconnects after publishing a final unseen value, each receiver can still
+//! If all senders are dropped after publishing a final unseen value, each receiver can still
 //! observe that value once before [`RecvError::Disconnected`] is reported.
 //!
 //! # Examples
@@ -65,6 +65,7 @@ pub use self::error::SendError;
 use crate::internal::mutex::Mutex;
 use crate::internal::waitset::WaitSet;
 use crate::internal::waitset::WakerToken;
+use crate::internal::waitset::wake_all;
 
 /// Creates a watch channel with an initial value.
 ///
@@ -107,7 +108,7 @@ struct State<T> {
     waiters: WaitSet,
 }
 
-/// A sending endpoint of a watch channel.
+/// The sending side of a watch channel.
 pub struct Sender<T> {
     shared: Arc<Shared<T>>,
 }
@@ -136,16 +137,11 @@ impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         let wakers = {
             let mut state = self.shared.state.lock();
-            state.senders = state
-                .senders
-                .checked_sub(1)
-                .expect("watch sender count underflowed");
+            state.senders -= 1;
             (state.senders == 0 && !state.waiters.is_empty()).then(|| state.waiters.take_wakers())
         };
         if let Some(wakers) = wakers {
-            for waker in wakers {
-                waker.wake();
-            }
+            wake_all(wakers);
         }
     }
 }
@@ -174,9 +170,7 @@ impl<T> Sender<T> {
             (wakers, replaced)
         };
         if let Some(wakers) = wakers {
-            for waker in wakers {
-                waker.wake();
-            }
+            wake_all(wakers);
         }
         drop(replaced);
         Ok(())
@@ -196,14 +190,9 @@ impl<T> Sender<T> {
             seen,
         }
     }
-
-    /// Returns the number of active receivers.
-    pub fn receiver_count(&self) -> usize {
-        self.shared.state.lock().receivers
-    }
 }
 
-/// A receiving endpoint of a watch channel.
+/// A receiver for a watch channel.
 ///
 /// Each receiver independently tracks the latest version it has observed.
 pub struct Receiver<T> {
@@ -235,10 +224,7 @@ impl<T> fmt::Debug for Receiver<T> {
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         let mut state = self.shared.state.lock();
-        state.receivers = state
-            .receivers
-            .checked_sub(1)
-            .expect("watch receiver count underflowed");
+        state.receivers -= 1;
     }
 }
 
@@ -257,8 +243,8 @@ impl<T> Receiver<T> {
 
     /// Returns whether a version newer than the last observed version exists.
     ///
-    /// An unseen final version is reported before disconnection, even if every sender has already
-    /// been dropped.
+    /// An unseen final version is reported before disconnection, even if all senders have been
+    /// dropped.
     pub fn has_changed(&self) -> Result<bool, RecvError> {
         let state = self.shared.state.lock();
         if state.version != self.seen {
@@ -282,7 +268,7 @@ impl<T> Receiver<T> {
         .await
     }
 
-    /// Returns whether every sender has been dropped.
+    /// Returns whether all senders have been dropped.
     ///
     /// This does not mark the current version observed, so it may return `true` while a final
     /// unseen value is still available through [`Receiver::changed`].
