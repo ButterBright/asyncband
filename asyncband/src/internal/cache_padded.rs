@@ -15,19 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A multi-producer, single-consumer queue for sending values between asynchronous tasks.
+use std::ops::Deref;
+use std::ops::DerefMut;
 
-mod bounded;
-mod error;
-mod unbounded;
+/// Pads a value to reduce false sharing between adjacent values.
+///
+/// On Zen 5, padding the 40-byte shard mutex to 64 bytes increased its size by 60% and improved
+/// write performance by 25% at 32 threads. Other architectures still need to be measured.
+#[repr(align(64))]
+pub struct CachePadded<T> {
+    value: T,
+}
 
-pub use self::bounded::BoundedReceiver;
-pub use self::bounded::BoundedSender;
-pub use self::bounded::bounded;
-pub use self::error::RecvError;
-pub use self::error::SendError;
-pub use self::error::TryRecvError;
-pub use self::error::TrySendError;
-pub use self::unbounded::UnboundedReceiver;
-pub use self::unbounded::UnboundedSender;
-pub use self::unbounded::unbounded;
+impl<T> CachePadded<T> {
+    pub const fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T> Deref for CachePadded<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> DerefMut for CachePadded<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}

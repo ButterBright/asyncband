@@ -16,6 +16,8 @@
 // under the License.
 
 use std::collections::hash_map::RandomState;
+use std::hash::BuildHasherDefault;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -114,6 +116,25 @@ async fn get_remove_and_discard() {
     assert_eq!(map.get("key"), None);
 }
 
+#[test]
+fn discard_releases_the_removed_value() {
+    #[derive(Clone)]
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let drops = Arc::new(AtomicUsize::new(0));
+    let map: OnceMap<_, _> = [(0, DropCounter(Arc::clone(&drops)))].into_iter().collect();
+
+    map.discard(&0);
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn remove_while_computing_detaches_entry() {
     let map = Arc::new(OnceMap::new());
@@ -188,4 +209,28 @@ async fn supports_non_clone_keys_and_owned_values() {
 
     assert_eq!(value, "value");
     assert_eq!(map.get(&Key(1)), Some("value".to_owned()));
+}
+
+#[tokio::test]
+async fn entries_with_colliding_hashes_remain_independent() {
+    #[derive(Default)]
+    struct ConstantHasher;
+
+    impl Hasher for ConstantHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, _bytes: &[u8]) {}
+    }
+
+    let map = OnceMap::with_hasher(BuildHasherDefault::<ConstantHasher>::default());
+    assert_eq!(map.compute("first", async || 1).await, 1);
+    assert_eq!(map.compute("second", async || 2).await, 2);
+    assert_eq!(map.get("first"), Some(1));
+    assert_eq!(map.get("second"), Some(2));
+
+    map.discard("first");
+    assert_eq!(map.get("first"), None);
+    assert_eq!(map.get("second"), Some(2));
 }

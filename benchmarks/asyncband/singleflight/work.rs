@@ -16,60 +16,62 @@
 // under the License.
 
 use std::cell::Cell;
+use std::hash::BuildHasherDefault;
+use std::hash::DefaultHasher;
 
 use asyncband::singleflight::Group;
 use divan::Bencher;
 use divan::black_box;
 
 use crate::support::bench_context;
-use crate::support::defer_input_drop;
 use crate::support::poll_pending;
 use crate::support::poll_pinned_ready;
 use crate::support::poll_ready;
 use crate::support::spin_poll_ready;
 use crate::support::thread_slot_ticket;
 use crate::support::wait_until_open;
-use crate::support::yield_polls;
 
 const WAITER_COUNTS: &[usize] = &[1, 8, 32];
 const THREAD_COUNTS: &[usize] = &[1, 2, 8, 32];
 const DISJOINT_KEY_SPAN: usize = 1 << 16;
-const COALESCED_LEADER_POLLS: usize = 32;
+
+type BenchGroup = Group<usize, usize, BuildHasherDefault<DefaultHasher>>;
 
 #[divan::bench]
-fn work_ready(bencher: Bencher) {
+fn construct_default(bencher: Bencher) {
+    bencher.bench_local(BenchGroup::default);
+}
+
+#[divan::bench]
+fn work_vacant(bencher: Bencher) {
+    let group = BenchGroup::default();
     let mut context = bench_context();
-    bencher
-        .with_inputs(Group::<usize, usize>::new)
-        .bench_local_values(|group| {
-            let result = black_box(poll_ready(
-                group.work(black_box(0), || async { black_box(1) }),
-                &mut context,
-            ));
-            defer_input_drop(group, result)
-        });
+    bencher.bench_local(|| {
+        black_box(poll_ready(
+            group.work(black_box(0), || async { black_box(1) }),
+            &mut context,
+        ))
+    });
 }
 
 #[divan::bench]
 fn try_work_error(bencher: Bencher) {
+    let group = BenchGroup::default();
     let mut context = bench_context();
-    bencher
-        .with_inputs(Group::<usize, usize>::new)
-        .bench_local_values(|group| {
-            let result = black_box(poll_ready(
-                group.try_work(black_box(0), || async { Err::<usize, ()>(()) }),
-                &mut context,
-            ));
-            defer_input_drop(group, result)
-        });
+    bencher.bench_local(|| {
+        black_box(poll_ready(
+            group.try_work(black_box(0), || async { Err::<usize, ()>(()) }),
+            &mut context,
+        ))
+    });
 }
 
 #[divan::bench(args = WAITER_COUNTS)]
 fn coalesced_work_batch(bencher: Bencher, waiter_count: usize) {
+    let group = BenchGroup::default();
     let mut context = bench_context();
 
     bencher.bench_local(|| {
-        let group = Group::<usize, usize>::new();
         let gate = Cell::new(false);
         let mut leader = Box::pin(group.work(0, || async {
             wait_until_open(&gate).await;
@@ -94,39 +96,8 @@ fn coalesced_work_batch(bencher: Bencher, waiter_count: usize) {
 }
 
 #[divan::bench(threads = THREAD_COUNTS)]
-fn contended_work_same_key(bencher: Bencher) {
-    let group = Group::<usize, usize>::new();
-
-    bencher.bench(|| {
-        let mut context = bench_context();
-        black_box(spin_poll_ready(
-            group.work(black_box(0), || async { black_box(1) }),
-            &mut context,
-        ))
-    });
-}
-
-// The leader stays in flight for several polls so calls on other threads coalesce as duplicate
-// waiters instead of leading their own cycles.
-#[divan::bench(threads = THREAD_COUNTS)]
-fn contended_work_coalesced(bencher: Bencher) {
-    let group = Group::<usize, usize>::new();
-
-    bencher.bench(|| {
-        let mut context = bench_context();
-        black_box(spin_poll_ready(
-            group.work(black_box(0), || async {
-                yield_polls(COALESCED_LEADER_POLLS).await;
-                black_box(1)
-            }),
-            &mut context,
-        ))
-    });
-}
-
-#[divan::bench(threads = THREAD_COUNTS)]
 fn contended_work_disjoint_churn(bencher: Bencher) {
-    let group = Group::<usize, usize>::new();
+    let group = BenchGroup::default();
 
     bencher.bench(|| {
         let mut context = bench_context();

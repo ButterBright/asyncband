@@ -41,10 +41,7 @@ pub(crate) mod arena;
 pub(crate) mod countdown;
 
 #[cfg(any(feature = "once-map", feature = "singleflight"))]
-// `OnceMap` and `singleflight` use different subsets of `OnceTable`, so single-feature builds
-// leave some operations in the shared implementation unused.
-#[allow(dead_code)]
-pub(crate) mod once_table;
+pub(crate) mod cache_padded;
 
 #[cfg(any(feature = "lazy-cell", feature = "once-cell"))]
 // `LazyCell` and `OnceCell` use different subsets of `ValueCell`, so single-feature builds leave
@@ -97,3 +94,22 @@ pub(crate) mod waitlist;
 // `new`. One constructor is therefore unused in every single-primitive build.
 #[allow(dead_code)]
 pub(crate) mod waitset;
+
+#[cfg(any(feature = "once-map", feature = "singleflight"))]
+fn scaled_shard_count(scale: usize) -> usize {
+    (std::thread::available_parallelism().map_or(1, |parallelism| parallelism.get()) * scale)
+        .next_power_of_two()
+}
+
+#[cfg(feature = "once-map")]
+pub fn once_map_shard_count() -> usize {
+    // OnceMap is typically long-lived, so preserve parallelism rather than optimizing its one-time
+    // construction cost. Read locks keep cached values concurrent within a shard.
+    scaled_shard_count(8)
+}
+
+#[cfg(feature = "singleflight")]
+pub fn singleflight_shard_count() -> usize {
+    // Every call inserts and removes an entry, making shard-level write contention the common path.
+    scaled_shard_count(8)
+}
