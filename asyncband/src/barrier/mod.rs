@@ -180,7 +180,8 @@ impl Barrier {
             state: Mutex::new(BarrierState {
                 arrived: 0,
                 generation: 0,
-                waiters: WaitSet::with_capacity(n as usize),
+                // The final participant completes the generation without parking.
+                waiters: WaitSet::with_capacity((n - 1) as usize),
             }),
         }
     }
@@ -239,12 +240,12 @@ impl Barrier {
             let generation = state.generation;
             state.arrived += 1;
 
-            // the last arriver is the leader;
-            // wake up other waiters, increment the generation, and return
+            // The final arrival completes this generation. Advance the generation while holding
+            // the state lock, then wake the drained followers after releasing it.
             if state.arrived == self.n {
                 state.arrived = 0;
                 state.generation += 1;
-                let wakers = state.waiters.take_wakers();
+                let wakers = state.waiters.drain();
                 drop(state);
                 wake_all(wakers);
                 return BarrierWaitResult(true);
@@ -291,16 +292,24 @@ impl Future for BarrierWait<'_> {
             barrier,
         } = self.get_mut();
 
-        let replaced_waker = {
-            let mut state = barrier.state.lock();
-            if *generation < state.generation {
-                // Advancing the generation drains its registrations under this same lock.
-                *token = None;
-                return Poll::Ready(());
-            }
-            state.waiters.register_waker(token, cx)
-        };
-        drop(replaced_waker);
+        // A follower normally parks once, so cloning first keeps its common pending path to one
+        // state-lock acquisition. Cloning may reenter and complete the barrier; checking the
+        // generation afterward closes that race. The completion poll may clone an unused waker,
+        // which is the deliberate cost of avoiding a second lock-and-recheck phase here.
+        let waker = cx.waker().clone();
+        let mut state = barrier.state.lock();
+        if *generation < state.generation {
+            // Completion advances the generation and drains its old waiters under this same lock,
+            // so no registration represented by this token remains in the wait set.
+            *token = None;
+            drop(state);
+            drop(waker);
+            return Poll::Ready(());
+        }
+
+        let retired_waker = state.waiters.register(token, waker);
+        drop(state);
+        drop(retired_waker);
         Poll::Pending
     }
 }
@@ -310,7 +319,7 @@ impl Drop for BarrierWait<'_> {
         if self.token.is_some() {
             let removed_waker = {
                 let mut state = self.barrier.state.lock();
-                state.waiters.unregister_waker(&mut self.token)
+                state.waiters.unregister(&mut self.token)
             };
             drop(removed_waker);
         }
