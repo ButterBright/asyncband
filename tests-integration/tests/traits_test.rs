@@ -21,6 +21,7 @@ use asyncband::barrier::Barrier;
 use asyncband::broadcast;
 use asyncband::completion;
 use asyncband::condvar::Condvar;
+use asyncband::event::ManualResetEvent;
 use asyncband::latch::Latch;
 use asyncband::mpsc;
 use asyncband::mutex::Mutex;
@@ -71,6 +72,7 @@ fn public_types_are_send_and_sync() {
 
     assert_send_and_sync::<Barrier>();
     assert_send_and_sync::<Condvar>();
+    assert_send_and_sync::<ManualResetEvent>();
     assert_send_and_sync::<completion::Completer<Cell<u8>>>();
     assert_send_and_sync::<completion::Completer<i64>>();
     assert_send_and_sync::<completion::Completion<i64>>();
@@ -137,6 +139,7 @@ fn public_types_are_unpin() {
 
     assert_unpin::<Barrier>();
     assert_unpin::<Condvar>();
+    assert_unpin::<ManualResetEvent>();
     assert_unpin::<completion::Completer<i64>>();
     assert_unpin::<completion::Completion<i64>>();
     assert_unpin::<completion::Abandoned>();
