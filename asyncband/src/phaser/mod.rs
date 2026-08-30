@@ -346,7 +346,7 @@ impl Phaser {
                 state.unarrived = state.registered;
                 *participant_phase = state.phase;
                 *participant_arrived = false;
-                Some(state.waiters.take_wakers())
+                Some(state.waiters.drain())
             } else {
                 None
             };
@@ -374,25 +374,25 @@ impl Phaser {
         observed: Phase,
         cx: &mut Context<'_>,
     ) -> Poll<Phase> {
-        let replaced_waker = {
+        let waker = cx.waker().clone();
+        let _retired_waker = {
             let mut state = self.state.lock();
             if state.phase != observed {
+                let phase = state.phase;
                 *token = None;
-                return Poll::Ready(state.phase);
+                return Poll::Ready(phase);
             }
-            state.waiters.register_waker(token, cx)
+            state.waiters.register(token, waker)
         };
-        drop(replaced_waker);
         Poll::Pending
     }
 
     fn unregister_waker(&self, token: &mut Option<WakerToken>) {
         if token.is_some() {
-            let removed_waker = {
+            let _removed_waker = {
                 let mut state = self.state.lock();
-                state.waiters.unregister_waker(token)
+                state.waiters.unregister(token)
             };
-            drop(removed_waker);
         }
     }
 }

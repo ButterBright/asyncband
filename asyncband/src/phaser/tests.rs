@@ -246,16 +246,20 @@ fn registration_after_last_participant_drop_joins_the_advanced_phase() {
 fn wait_for_advance_is_a_cancel_safe_non_participant_observer() {
     let phaser = Arc::new(Phaser::new());
     let phase = phaser.phase();
+    let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&counter));
+    let mut context = Context::from_waker(&waker);
 
     {
-        let mut wait = spawn(phaser.wait_for_advance(phase));
-        assert_pending!(wait.poll());
+        let mut wait = Box::pin(phaser.wait_for_advance(phase));
+        assert_eq!(Future::poll(wait.as_mut(), &mut context), Poll::Pending);
         assert_eq!(phaser.registered_parties(), 0);
-        assert!(!phaser.state.lock().waiters.is_empty());
     }
 
     assert_eq!(phaser.registered_parties(), 0);
-    assert!(phaser.state.lock().waiters.is_empty());
+    let participant = phaser.register();
+    drop(participant);
+    assert_eq!(counter.0.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -299,23 +303,37 @@ fn cancelling_a_woken_waiter_does_not_unregister_a_next_phase_waiter() {
     let phaser = Arc::new(Phaser::new());
     let phase0 = phaser.phase();
     let participant = phaser.register();
-    let mut stale_wait = spawn(phaser.wait_for_advance(phase0));
+    let stale_counter = Arc::new(CountWake(AtomicUsize::new(0)));
+    let stale_waker = Waker::from(Arc::clone(&stale_counter));
+    let mut stale_context = Context::from_waker(&stale_waker);
+    let mut stale_wait = Box::pin(phaser.wait_for_advance(phase0));
 
-    assert_pending!(stale_wait.poll());
+    assert_eq!(
+        Future::poll(stale_wait.as_mut(), &mut stale_context),
+        Poll::Pending
+    );
     drop(participant);
     let phase1 = phaser.phase();
     assert_ne!(phase1, phase0);
+    assert_eq!(stale_counter.0.load(Ordering::Relaxed), 1);
 
     let participant = phaser.register();
-    let mut current_wait = spawn(phaser.wait_for_advance(phase1));
-    assert_pending!(current_wait.poll());
-    assert!(!phaser.state.lock().waiters.is_empty());
+    let current_counter = Arc::new(CountWake(AtomicUsize::new(0)));
+    let current_waker = Waker::from(Arc::clone(&current_counter));
+    let mut current_context = Context::from_waker(&current_waker);
+    let mut current_wait = Box::pin(phaser.wait_for_advance(phase1));
+    assert_eq!(
+        Future::poll(current_wait.as_mut(), &mut current_context),
+        Poll::Pending
+    );
 
     drop(stale_wait);
-    assert!(!phaser.state.lock().waiters.is_empty());
-
     drop(participant);
-    assert_ready!(current_wait.poll());
+    assert_eq!(current_counter.0.load(Ordering::Relaxed), 1);
+    assert!(matches!(
+        Future::poll(current_wait.as_mut(), &mut current_context),
+        Poll::Ready(_)
+    ));
 }
 
 #[test]
