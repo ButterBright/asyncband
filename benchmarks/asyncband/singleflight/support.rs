@@ -15,30 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use divan::Bencher;
-use divan::black_box;
+use std::hash::BuildHasherDefault;
+use std::hash::DefaultHasher;
 
-use super::support::CONTENDED_ENTRY_COUNTS;
-use super::support::CONTENDED_THREAD_SLOTS;
-use super::support::THREAD_COUNTS;
-use super::support::cached_map;
+use asyncband::singleflight::Group;
+
 use crate::support::thread_slot_ticket;
 
-#[divan::bench(threads = THREAD_COUNTS)]
-fn contended_get_hit_same_key(bencher: Bencher) {
-    let map = cached_map(1);
+pub const BATCH_SIZES: &[usize] = &[2, 8, 32];
+pub const BATCH_SAMPLE_SIZE: u32 = 64;
+pub const CONTENDED_SAMPLE_SIZE: u32 = 64;
+pub const FAST_SAMPLE_SIZE: u32 = 256;
+pub const THREAD_COUNTS: &[usize] = &[1, 2, 8, 32];
 
-    bencher.bench(|| black_box(map.get(black_box(&0))));
-}
+pub type BenchGroup = Group<usize, usize, BuildHasherDefault<DefaultHasher>>;
 
-#[divan::bench(threads = THREAD_COUNTS, args = CONTENDED_ENTRY_COUNTS)]
-fn contended_get_hit_disjoint(bencher: Bencher, cached_entries: usize) {
-    let map = cached_map(cached_entries);
+pub fn unique_thread_key() -> usize {
+    const THREAD_SLOTS: usize = 64;
 
-    bencher
-        .with_inputs(|| {
-            let (slot, ticket) = thread_slot_ticket();
-            (slot + ticket * CONTENDED_THREAD_SLOTS) % cached_entries
-        })
-        .bench_values(|key| black_box(map.get(black_box(&key))));
+    let (slot, ticket) = thread_slot_ticket();
+    ticket.wrapping_mul(THREAD_SLOTS).wrapping_add(slot)
 }
