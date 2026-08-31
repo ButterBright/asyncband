@@ -306,7 +306,7 @@ impl Phaser {
         participant_phase: &mut Phase,
         participant_arrived: &mut bool,
         deregister: bool,
-    ) -> (Phase, Option<impl Iterator<Item = Waker> + 'static>) {
+    ) -> (Phase, Option<Vec<Waker>>) {
         {
             let mut state = self.state.lock();
             if *participant_phase != state.phase {
@@ -346,7 +346,7 @@ impl Phaser {
                 state.unarrived = state.registered;
                 *participant_phase = state.phase;
                 *participant_arrived = false;
-                Some(state.waiters.drain())
+                Some(state.waiters.drain().collect())
             } else {
                 None
             };
@@ -363,7 +363,7 @@ impl Phaser {
         let (arrival_phase, wakers) =
             self.record_arrival(participant_phase, participant_arrived, deregister);
         if let Some(wakers) = wakers {
-            wake_all(wakers);
+            wake_all(wakers.into_iter());
         }
         arrival_phase
     }
@@ -450,7 +450,7 @@ impl PhaserParticipant {
                         .record_arrival(&mut self.phase, &mut self.arrived, false);
                 self.pending_wait = Some(phase);
                 if let Some(wakers) = wakers {
-                    wake_all(wakers);
+                    wake_all(wakers.into_iter());
                 }
                 phase
             }
