@@ -116,12 +116,14 @@ impl PoolConfig {
     }
 
     /// Returns a new [`PoolConfig`] with the specified queue strategy.
+    #[must_use = "this method returns the updated pool configuration"]
     pub fn with_queue_strategy(mut self, queue_strategy: QueueStrategy) -> Self {
         self.queue_strategy = queue_strategy;
         self
     }
 
     /// Returns a new [`PoolConfig`] with the specified recycle cancelled strategy.
+    #[must_use = "this method returns the updated pool configuration"]
     pub fn with_recycle_cancelled_strategy(
         mut self,
         recycle_cancelled_strategy: RecycleCancelledStrategy,
@@ -299,10 +301,11 @@ impl<M: ManageObject> Pool<M> {
         Ok(object)
     }
 
-    /// Retains only the objects that pass the given predicate.
+    /// Retains idle objects for which `f` returns `true`.
     ///
-    /// The predicate runs while the idle-object lock is held and therefore must not block or call
-    /// back into the pool. Detachment hooks for removed objects run after the lock is released.
+    /// Checked-out objects are skipped and may return to the pool later. The predicate runs while
+    /// the pool is locked and must not call back into it; detachment hooks run after the lock is
+    /// released.
     ///
     /// The following example starts a background task that runs every 30 seconds and removes
     /// objects from the pool that have not been used for more than one minute. The task will
@@ -510,6 +513,9 @@ impl<M: ManageObject> Object<M> {
     /// Detaches the object from the [`Pool`].
     ///
     /// This reduces the size of the pool by one.
+    ///
+    /// If the pool still exists, its manager may modify the detached object in
+    /// [`ManageObject::on_detached`].
     pub fn detach(mut self) -> M::Object {
         // INVARIANT: `state` is `Some` until this object is detached or dropped.
         let mut o = self.state.take().unwrap().o;
