@@ -54,9 +54,9 @@ use std::task::Context;
 use std::task::Poll;
 
 use crate::internal::mutex::Mutex;
-use crate::internal::waitset::WaitSet;
-use crate::internal::waitset::WakerToken;
 use crate::internal::wake_all;
+use crate::internal::wakerset::WakerSet;
+use crate::internal::wakerset::WakerToken;
 
 /// A synchronization primitive for multiple tasks that need to wait for each other.
 ///
@@ -70,7 +70,7 @@ pub struct Barrier {
 struct BarrierState {
     arrived: u32,
     generation: usize,
-    waiters: WaitSet,
+    waiters: WakerSet,
 }
 
 impl fmt::Debug for BarrierState {
@@ -145,7 +145,7 @@ impl Barrier {
                 arrived: 0,
                 generation: 0,
                 // The final participant completes the generation without parking.
-                waiters: WaitSet::with_capacity((n - 1) as usize),
+                waiters: WakerSet::with_capacity((n - 1) as usize),
             }),
         }
     }
@@ -240,16 +240,16 @@ impl Future for BarrierWait<'_> {
             barrier,
         } = self.get_mut();
 
-        let retired_waker = {
-            let mut state = barrier.state.lock();
-            if *generation < state.generation {
-                // Completion advances the generation and drains its old waiters under this same
-                // lock, so no registration represented by this token remains in the wait set.
-                *token = None;
-                return Poll::Ready(());
-            }
-            state.waiters.register(token, cx.waker())
-        };
+        let mut state = barrier.state.lock();
+        if *generation < state.generation {
+            // Completion advances the generation and drains its old waiters under this same lock,
+            // so no registration represented by this token remains in the waker set.
+            *token = None;
+            return Poll::Ready(());
+        }
+
+        let retired_waker = state.waiters.register(token, cx.waker());
+        drop(state);
         drop(retired_waker);
         Poll::Pending
     }
@@ -257,12 +257,20 @@ impl Future for BarrierWait<'_> {
 
 impl Drop for BarrierWait<'_> {
     fn drop(&mut self) {
-        if self.token.is_some() {
-            let removed_waker = {
-                let mut state = self.barrier.state.lock();
-                state.waiters.unregister(&mut self.token)
-            };
-            drop(removed_waker);
+        if self.token.is_none() {
+            return;
         }
+
+        let mut state = self.barrier.state.lock();
+        if self.generation != state.generation {
+            // Advancing the generation detached this registration before making the new generation
+            // visible under the same lock.
+            self.token = None;
+            return;
+        }
+
+        let removed_waker = state.waiters.unregister(&mut self.token);
+        drop(state);
+        drop(removed_waker);
     }
 }

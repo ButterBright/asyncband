@@ -60,26 +60,25 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
-use std::task::Waker;
 
-use crate::internal::arena::Arena;
-use crate::internal::arena::SlotId;
 use crate::internal::mutex::Mutex;
 use crate::internal::wake_all;
+use crate::internal::wakerset::WakerSet;
+use crate::internal::wakerset::WakerToken;
 
 #[derive(Debug)]
 struct State {
     // Wait futures also own the state allocation, so Arc's strong count cannot represent handles.
     // Zero is terminal: after it is published, no new handle or waiter can be registered.
     handles: AtomicUsize,
-    waiters: Mutex<Arena<Waker>>,
+    waiters: Mutex<WakerSet>,
 }
 
 impl State {
     fn new() -> Self {
         Self {
             handles: AtomicUsize::new(1),
-            waiters: Mutex::new(Arena::new()),
+            waiters: Mutex::new(WakerSet::new()),
         }
     }
 
@@ -105,50 +104,40 @@ impl State {
         wake_all(wakers);
     }
 
-    fn poll_wait(&self, token: &mut Option<SlotId>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_wait(&self, token: &mut Option<WakerToken>, cx: &mut Context<'_>) -> Poll<()> {
         if self.handles.load(Ordering::Acquire) == 0 {
             *token = None;
             return Poll::Ready(());
         }
 
-        let retired_waker = {
-            let mut waiters = self.waiters.lock();
-            if self.handles.load(Ordering::Acquire) == 0 {
-                *token = None;
-                return Poll::Ready(());
-            }
+        let mut waiters = self.waiters.lock();
+        if self.handles.load(Ordering::Acquire) == 0 {
+            *token = None;
+            return Poll::Ready(());
+        }
 
-            if let Some(current) = token.and_then(|id| waiters.get_mut(id)) {
-                if current.will_wake(cx.waker()) {
-                    None
-                } else {
-                    Some(std::mem::replace(current, cx.waker().clone()))
-                }
-            } else {
-                *token = Some(waiters.insert(cx.waker().clone()));
-                None
-            }
-        };
+        let retired_waker = waiters.register(token, cx.waker());
+        drop(waiters);
         drop(retired_waker);
         Poll::Pending
     }
 
-    fn unregister(&self, token: &mut Option<SlotId>) {
-        let Some(id) = token.take() else {
+    fn unregister(&self, token: &mut Option<WakerToken>) {
+        if token.is_none() {
             return;
-        };
+        }
 
-        let removed_waker = {
-            let mut waiters = self.waiters.lock();
-            // Reaching zero is terminal, so the zero transition either owns this waker or has
-            // already taken it. Unlike reusable wait sets, no epoch is needed to disambiguate a
-            // later registration.
-            if self.handles.load(Ordering::Acquire) == 0 {
-                None
-            } else {
-                Some(waiters.remove(id))
-            }
-        };
+        let mut waiters = self.waiters.lock();
+        // Reaching zero is terminal, so the zero transition either owns this waker or has already
+        // taken it. Unlike reusable waker sets, no epoch is needed to disambiguate a later
+        // registration.
+        if self.handles.load(Ordering::Acquire) == 0 {
+            *token = None;
+            return;
+        }
+
+        let removed_waker = waiters.unregister(token);
+        drop(waiters);
         drop(removed_waker);
     }
 }
@@ -235,7 +224,7 @@ impl IntoFuture for WaitGroup {
 /// adding a worker to the group.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Wait {
-    token: Option<SlotId>,
+    token: Option<WakerToken>,
     state: Arc<State>,
 }
 

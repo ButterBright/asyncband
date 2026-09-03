@@ -74,9 +74,9 @@ use std::task::Poll;
 pub use self::error::RecvError;
 pub use self::error::SendError;
 use crate::internal::mutex::Mutex;
-use crate::internal::waitset::WaitSet;
-use crate::internal::waitset::WakerToken;
 use crate::internal::wake_all;
+use crate::internal::wakerset::WakerSet;
+use crate::internal::wakerset::WakerToken;
 
 /// Creates a watch channel with an initial value.
 ///
@@ -97,7 +97,7 @@ pub fn channel<T: Clone>(initial: T) -> (Sender<T>, Receiver<T>) {
             version: 0,
             senders: 1,
             receivers: 1,
-            waiters: WaitSet::new(),
+            waiters: WakerSet::new(),
         }),
     });
     let sender = Sender {
@@ -116,7 +116,7 @@ struct State<T> {
     version: u64,
     senders: usize,
     receivers: usize,
-    waiters: WaitSet,
+    waiters: WakerSet,
 }
 
 /// The sending side of a watch channel.
@@ -356,19 +356,20 @@ impl<T> Future for Change<'_, T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let (poll, retired_waker) = {
-            let mut state = this.shared.state.lock();
-            if state.version != this.seen {
-                let retired = state.waiters.unregister(&mut this.token);
-                (Poll::Ready(Ok(state.version)), retired)
-            } else if state.senders == 0 {
-                let retired = state.waiters.unregister(&mut this.token);
-                (Poll::Ready(Err(RecvError::Disconnected)), retired)
-            } else {
-                let retired = state.waiters.register(&mut this.token, cx.waker());
-                (Poll::Pending, retired)
-            }
+        let mut state = this.shared.state.lock();
+        let (poll, retired_waker) = if state.version != this.seen {
+            // Publishing a newer version detached this registration under the same lock.
+            this.token = None;
+            (Poll::Ready(Ok(state.version)), None)
+        } else if state.senders == 0 {
+            // The final sender detached all registrations before releasing this state lock.
+            this.token = None;
+            (Poll::Ready(Err(RecvError::Disconnected)), None)
+        } else {
+            let retired = state.waiters.register(&mut this.token, cx.waker());
+            (Poll::Pending, retired)
         };
+        drop(state);
         drop(retired_waker);
         poll
     }
@@ -380,10 +381,15 @@ impl<T> Drop for Change<'_, T> {
             return;
         }
 
-        let waker = {
-            let mut state = self.shared.state.lock();
-            state.waiters.unregister(&mut self.token)
-        };
+        let mut state = self.shared.state.lock();
+        if state.version != self.seen || state.senders == 0 {
+            // A publication or terminal sender drop already detached this registration.
+            self.token = None;
+            return;
+        }
+
+        let waker = state.waiters.unregister(&mut self.token);
+        drop(state);
         drop(waker);
     }
 }
