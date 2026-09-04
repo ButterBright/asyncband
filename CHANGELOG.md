@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+## v0.7.1
+
+This is an interim non-ASF release. It has not been approved by the Apache Incubator PMC and is not an act of the Apache Software Foundation.
+
+### Bug fixes
+
+* Correct source-header treatment and make third-party derivation and test provenance records more precise in source distributions.
+
 ## v0.7.0
 
 ### Breaking changes
