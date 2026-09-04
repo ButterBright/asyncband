@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Improvements
+
+* Preserve applicable third-party licensing and copyright notices on derived source files, and record exact provenance mappings and design acknowledgements in `LICENSE` and source comments.
+
 ## v0.7.1
 
 This is an interim non-ASF release. It has not been approved by the Apache Incubator PMC and is not an act of the Apache Software Foundation.
