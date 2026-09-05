@@ -101,9 +101,9 @@ use std::task::Poll;
 use std::task::Waker;
 
 use crate::internal::mutex::Mutex;
-use crate::internal::waitset::WaitSet;
-use crate::internal::waitset::WakerToken;
-use crate::internal::waitset::wake_all;
+use crate::internal::wake_all;
+use crate::internal::wakerset::WakerSet;
+use crate::internal::wakerset::WakerToken;
 
 #[cfg(test)]
 mod tests;
@@ -143,7 +143,7 @@ struct PhaserState {
     phase: Phase,
     registered: u32,
     unarrived: u32,
-    waiters: WaitSet,
+    waiters: WakerSet,
 }
 
 impl fmt::Debug for PhaserState {
@@ -181,7 +181,7 @@ impl Phaser {
                 phase: Phase(0),
                 registered: 0,
                 unarrived: 0,
-                waiters: WaitSet::new(),
+                waiters: WakerSet::new(),
             }),
         }
     }
@@ -374,26 +374,31 @@ impl Phaser {
         observed: Phase,
         cx: &mut Context<'_>,
     ) -> Poll<Phase> {
-        let waker = cx.waker().clone();
-        let _retired_waker = {
-            let mut state = self.state.lock();
-            if state.phase != observed {
-                let phase = state.phase;
-                *token = None;
-                return Poll::Ready(phase);
-            }
-            state.waiters.register(token, waker)
-        };
+        let mut state = self.state.lock();
+        if state.phase != observed {
+            let phase = state.phase;
+            *token = None;
+            return Poll::Ready(phase);
+        }
+
+        let _retired_waker = state.waiters.register(token, cx.waker());
+        drop(state);
         Poll::Pending
     }
 
-    fn unregister_waker(&self, token: &mut Option<WakerToken>) {
-        if token.is_some() {
-            let _removed_waker = {
-                let mut state = self.state.lock();
-                state.waiters.unregister(token)
-            };
+    fn unregister_waker(&self, token: &mut Option<WakerToken>, observed: Phase) {
+        if token.is_none() {
+            return;
         }
+
+        let mut state = self.state.lock();
+        if state.phase != observed {
+            *token = None;
+            return;
+        }
+
+        let _removed_waker = state.waiters.unregister(token);
+        drop(state);
     }
 }
 
@@ -515,6 +520,6 @@ impl Future for PhaserWait<'_> {
 
 impl Drop for PhaserWait<'_> {
     fn drop(&mut self) {
-        self.phaser.unregister_waker(&mut self.token);
+        self.phaser.unregister_waker(&mut self.token, self.observed);
     }
 }

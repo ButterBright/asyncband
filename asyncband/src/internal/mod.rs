@@ -129,6 +129,7 @@ pub(crate) mod waitlist;
     feature = "mpsc",
     feature = "mutex",
     feature = "once",
+    feature = "phaser",
     feature = "rwlock",
     feature = "semaphore",
     feature = "waitgroup",
